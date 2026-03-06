@@ -17,7 +17,7 @@ import 'package:permission_handler/permission_handler.dart';
 // Sets a platform override for desktop to avoid exceptions. See
 // https://flutter.dev/desktop#target-platform-override for more info.
 void _enablePlatformOverrideForDesktop() {
-  if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
+  if (kDebugMode && !kIsWeb && (Platform.isWindows || Platform.isLinux)) {
     debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
   }
 }
@@ -124,7 +124,7 @@ class _MyHomePageState extends State<MyHomePage> {
           wifiBSSID = 'Unauthorized to get Wifi BSSID';
         }
       } else {
-        wifiName = await _networkInfo.getWifiName();
+        wifiBSSID = await _networkInfo.getWifiBSSID();
       }
     } on PlatformException catch (e) {
       developer.log('Failed to get Wifi BSSID', error: e);
