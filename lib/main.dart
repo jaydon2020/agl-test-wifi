@@ -14,7 +14,10 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'AGL Wi-Fi Demo',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue, brightness: Brightness.dark),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Brightness.dark,
+        ),
         useMaterial3: true,
       ),
       home: const WifiPage(),
@@ -236,7 +239,9 @@ class _WifiPageState extends State<WifiPage> {
                           Text(
                             !_isWifiPowered
                                 ? 'Wi-Fi is OFF'
-                                : (!_isConnected ? 'Disconnected' : 'Connected'),
+                                : (!_isConnected
+                                      ? 'Disconnected'
+                                      : 'Connected'),
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                         ],
@@ -276,11 +281,14 @@ class _WifiPageState extends State<WifiPage> {
                         title: Text(
                           name,
                           style: TextStyle(
-                            fontWeight: isConnected ? FontWeight.bold : FontWeight.normal,
+                            fontWeight: isConnected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
                           ),
                         ),
                         subtitle: Text(
-                            '${state} • Security: ${security.isNotEmpty ? security : "None"} • Strength: ${strength}%'),
+                          '${state} • Security: ${security.isNotEmpty ? security : "None"} • Strength: ${strength}%',
+                        ),
                         trailing: isConnected
                             ? const Icon(Icons.check, color: Colors.green)
                             : null,
