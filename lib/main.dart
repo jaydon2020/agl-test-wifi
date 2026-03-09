@@ -165,6 +165,7 @@ class _WifiPageState extends State<WifiPage> {
   // Async helpers
   bool _isRefreshing = false; // guarded inside _refreshWifiStatus
   bool _isBusy = false;       // set by scan/connect/disconnect actions
+  bool _isToggling = false;   // set specifically during Wi-Fi power toggle
   StreamSubscription<dynamic>? _eventSub;
   static const _eventChannel = EventChannel('io.github.jaydon2020/events');
 
@@ -281,13 +282,15 @@ class _WifiPageState extends State<WifiPage> {
   // ---------------------------------------------------------------------------
 
   Future<void> _toggleWifi(bool value) async {
-    if (mounted) setState(() => _isBusy = true);
+    if (mounted) setState(() => _isToggling = true);
 
     // When enabling Wi-Fi, make sure the hardware is unblocked first.
     if (value) {
       try {
         await Process.run('rfkill', ['unblock', 'wifi']);
         await Process.run('ip', ['link', 'set', 'wlan0', 'up']);
+        // Add delay to allow the kernel and hardware to stabilize before ConnMan tries to use it.
+        await Future.delayed(const Duration(seconds: 2));
       } catch (e) {
         debugPrint('Wi-Fi hw setup error: $e');
       }
@@ -324,7 +327,7 @@ class _WifiPageState extends State<WifiPage> {
         }
       }
     } finally {
-      if (mounted) setState(() => _isBusy = false);
+      if (mounted) setState(() => _isToggling = false);
     }
   }
 
@@ -452,7 +455,7 @@ class _WifiPageState extends State<WifiPage> {
               const Text('Wi-Fi'),
               Switch(
                 value: _isWifiPowered,
-                onChanged: _isRefreshing ? null : _toggleWifi,
+                onChanged: (_isRefreshing || _isToggling) ? null : _toggleWifi,
               ),
             ],
           ),
