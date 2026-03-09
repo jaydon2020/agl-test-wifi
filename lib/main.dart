@@ -84,7 +84,12 @@ class _WifiPageState extends State<WifiPage> {
   }
 
   Future<void> _toggleWifi(bool value) async {
-    await ConnmanService.setWifiPowered(value);
+    final success = await ConnmanService.setWifiPowered(value);
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to toggle Wi-Fi power.')),
+      );
+    }
     await Future.delayed(const Duration(seconds: 1)); // Wait for state change
     _refreshWifiStatus();
   }
@@ -93,7 +98,12 @@ class _WifiPageState extends State<WifiPage> {
     setState(() {
       _isRefreshing = true;
     });
-    await ConnmanService.scanWifi();
+    final success = await ConnmanService.scanWifi();
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to scan for Wi-Fi.')),
+      );
+    }
     await Future.delayed(const Duration(seconds: 2)); // Give it time to scan
     _refreshWifiStatus();
   }
@@ -102,7 +112,12 @@ class _WifiPageState extends State<WifiPage> {
     setState(() {
       _isRefreshing = true;
     });
-    await ConnmanService.connectService(path);
+    final success = await ConnmanService.connectService(path);
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to connect to network.')),
+      );
+    }
     await Future.delayed(const Duration(seconds: 2));
     _refreshWifiStatus();
   }
@@ -111,7 +126,12 @@ class _WifiPageState extends State<WifiPage> {
     setState(() {
       _isRefreshing = true;
     });
-    await ConnmanService.disconnectService(path);
+    final success = await ConnmanService.disconnectService(path);
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to disconnect from network.')),
+      );
+    }
     await Future.delayed(const Duration(seconds: 2));
     _refreshWifiStatus();
   }
@@ -120,7 +140,12 @@ class _WifiPageState extends State<WifiPage> {
     setState(() {
       _isRefreshing = true;
     });
-    await ConnmanService.removeService(path);
+    final success = await ConnmanService.removeService(path);
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to forget network.')),
+      );
+    }
     await Future.delayed(const Duration(seconds: 1));
     _refreshWifiStatus();
   }
@@ -159,7 +184,7 @@ class _WifiPageState extends State<WifiPage> {
                   name,
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-                subtitle: Text('State: ${state}'),
+                subtitle: Text('State: $state'),
               ),
               const Divider(),
               if (state == 'ready' || state == 'online')

@@ -47,7 +47,7 @@ class ConnmanService {
     try {
       final result = await _channel.invokeListMethod<dynamic>('getWifiServices');
       if (result != null) {
-        return result.map((e) => Map<String, dynamic>.from(e)).toList();
+        return result.map((e) => Map<String, dynamic>.from(e as Map)).toList();
       }
       return [];
     } on PlatformException catch (e) {
