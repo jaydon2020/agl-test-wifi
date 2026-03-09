@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 
@@ -61,91 +62,83 @@ class ConnmanService {
   // Outgoing calls to C++
   // ---------------------------------------------------------------------------
 
-  /// Gets the current Wi-Fi technology status.
-  static Future<Map<String, dynamic>?> getWifiTechnology() async {
+  /// Helper to invoke a method with a timeout to avoid hanging the UI.
+  static Future<T?> _safeInvokeMethod<T>(String method, [dynamic arguments]) async {
     try {
-      final result = await _channel.invokeMethod('getWifiTechnology');
-      if (result != null) return Map<String, dynamic>.from(result);
+      return await _channel.invokeMethod<T>(method, arguments).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint('ConnmanService: Method "$method" timed out after 10s');
+          throw TimeoutException('Method "$method" timed out');
+        },
+      );
+    } on TimeoutException {
       return null;
     } on PlatformException catch (e) {
-      debugPrint('Failed to get Wi-Fi technology: ${e.message}');
+      debugPrint('ConnmanService: Failed to $method: ${e.message}');
+      return null;
+    } catch (e) {
+      debugPrint('ConnmanService: Unexpected error in $method: $e');
       return null;
     }
+  }
+
+  /// Gets the current Wi-Fi technology status.
+  static Future<Map<String, dynamic>?> getWifiTechnology() async {
+    final result = await _safeInvokeMethod('getWifiTechnology');
+    if (result != null) return Map<String, dynamic>.from(result as Map);
+    return null;
   }
 
   /// Sets the Wi-Fi powered state.
   static Future<bool> setWifiPowered(bool powered) async {
-    try {
-      final result =
-          await _channel.invokeMethod('setWifiPowered', {'powered': powered});
-      return result == true;
-    } on PlatformException catch (e) {
-      debugPrint('Failed to set Wi-Fi powered: ${e.message}');
-      return false;
-    }
+    final result = await _safeInvokeMethod('setWifiPowered', {'powered': powered});
+    return result == true;
   }
 
   /// Triggers a Wi-Fi scan.
   static Future<bool> scanWifi() async {
-    try {
-      final result = await _channel.invokeMethod('scanWifi');
-      return result == true;
-    } on PlatformException catch (e) {
-      debugPrint('Failed to scan Wi-Fi: ${e.message}');
-      return false;
-    }
+    final result = await _safeInvokeMethod('scanWifi');
+    return result == true;
   }
 
   /// Gets a list of available Wi-Fi services.
   static Future<List<Map<String, dynamic>>> getWifiServices() async {
     try {
-      final result =
-          await _channel.invokeListMethod<dynamic>('getWifiServices');
+      final result = await _channel.invokeListMethod<dynamic>('getWifiServices').timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint('ConnmanService: getWifiServices timed out');
+          return [];
+        },
+      );
       if (result != null) {
         return result
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
       }
       return [];
-    } on PlatformException catch (e) {
-      debugPrint('Failed to get Wi-Fi services: ${e.message}');
+    } catch (e) {
+      debugPrint('Failed to get Wi-Fi services: $e');
       return [];
     }
   }
 
   /// Connects to a specific Wi-Fi service.
   static Future<bool> connectService(String path) async {
-    try {
-      final result =
-          await _channel.invokeMethod('connectService', {'path': path});
-      return result == true;
-    } on PlatformException catch (e) {
-      debugPrint('Failed to connect service: ${e.message}');
-      return false;
-    }
+    final result = await _safeInvokeMethod('connectService', {'path': path});
+    return result == true;
   }
 
   /// Disconnects from a specific Wi-Fi service.
   static Future<bool> disconnectService(String path) async {
-    try {
-      final result =
-          await _channel.invokeMethod('disconnectService', {'path': path});
-      return result == true;
-    } on PlatformException catch (e) {
-      debugPrint('Failed to disconnect service: ${e.message}');
-      return false;
-    }
+    final result = await _safeInvokeMethod('disconnectService', {'path': path});
+    return result == true;
   }
 
   /// Removes (forgets) a specific Wi-Fi service.
   static Future<bool> removeService(String path) async {
-    try {
-      final result =
-          await _channel.invokeMethod('removeService', {'path': path});
-      return result == true;
-    } on PlatformException catch (e) {
-      debugPrint('Failed to remove service: ${e.message}');
-      return false;
-    }
+    final result = await _safeInvokeMethod('removeService', {'path': path});
+    return result == true;
   }
 }

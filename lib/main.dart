@@ -165,7 +165,6 @@ class _WifiPageState extends State<WifiPage> {
   // Async helpers
   bool _isRefreshing = false; // guarded inside _refreshWifiStatus
   bool _isBusy = false;       // set by scan/connect/disconnect actions
-  bool _showSavedExpanded = false;
   StreamSubscription<dynamic>? _eventSub;
   static const _eventChannel = EventChannel('io.github.jaydon2020/events');
 
@@ -198,13 +197,21 @@ class _WifiPageState extends State<WifiPage> {
       debugPrint('System wifi setup error: $e');
     }
 
-    // Subscribe to EventChannel BEFORE the first poll so we don't miss events.
+    await _startMonitoring();
+    await _refreshWifiStatus();
+  }
+
+  Future<void> _startMonitoring() async {
+    if (_eventSub != null) return;
     _eventSub = _eventChannel.receiveBroadcastStream().listen(
       _onEvent,
       onError: (err) => debugPrint('EventChannel error: $err'),
     );
+  }
 
-    await _refreshWifiStatus();
+  Future<void> _stopMonitoring() async {
+    await _eventSub?.cancel();
+    _eventSub = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -286,22 +293,38 @@ class _WifiPageState extends State<WifiPage> {
       }
     }
 
-    final success = await ConnmanService.setWifiPowered(value);
-    if (!success && mounted) {
-      _showSnack('Failed to toggle Wi-Fi power.');
-      setState(() => _isBusy = false);
-      return;
-    }
-    // Lightweight fallback: fetch technology state in case no
-    // technologyChanged event is emitted by the C++ plugin.
-    final techInfo = await ConnmanService.getWifiTechnology();
-    if (techInfo != null && mounted) {
-      setState(() {
-        _isWifiPowered = techInfo['powered'] as bool? ?? false;
-        _isConnected = techInfo['connected'] as bool? ?? false;
-        if (!_isWifiPowered) _wifiServices = [];
-        _isBusy = false;
-      });
+    try {
+      final success = await ConnmanService.setWifiPowered(value);
+      if (!success && mounted) {
+        _showSnack('Failed to toggle Wi-Fi power (Request timed out or error).');
+      }
+
+      if (value) {
+        // Turning ON: Re-init state and monitoring
+        await _startMonitoring();
+        final techInfo = await ConnmanService.getWifiTechnology();
+        if (techInfo != null && mounted) {
+          setState(() {
+            _isWifiPowered = techInfo['powered'] as bool? ?? false;
+            _isConnected = techInfo['connected'] as bool? ?? false;
+          });
+          if (_isWifiPowered) {
+            _wifiServices = await ConnmanService.getWifiServices();
+          }
+        }
+      } else {
+        // Turning OFF: Clear everything and stop monitoring
+        await _stopMonitoring();
+        if (mounted) {
+          setState(() {
+            _isWifiPowered = false;
+            _isConnected = false;
+            _wifiServices = [];
+          });
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
     }
   }
 
@@ -410,8 +433,13 @@ class _WifiPageState extends State<WifiPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Separate networks into groups
     final savedNetworks = _wifiServices
-        .where((s) => s['favorite'] == true)
+        .where((s) => s['favorite'] == true || s['autoConnect'] == true)
+        .toList();
+    
+    final otherNetworks = _wifiServices
+        .where((s) => !(s['favorite'] == true || s['autoConnect'] == true))
         .toList();
 
     return Scaffold(
@@ -483,118 +511,102 @@ class _WifiPageState extends State<WifiPage> {
             ),
           ),
 
-          // Saved Networks — expandable section
-          if (_isWifiPowered && savedNetworks.isNotEmpty) ...[
-            InkWell(
-              onTap: () => setState(() => _showSavedExpanded = !_showSavedExpanded),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Text('Saved Networks',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    ),
-                    Icon(_showSavedExpanded
-                        ? Icons.expand_less
-                        : Icons.expand_more),
-                  ],
-                ),
-              ),
-            ),
-            AnimatedCrossFade(
-              firstChild: const SizedBox.shrink(),
-              secondChild: Column(
-                children: savedNetworks.map((svc) {
-                  final name = svc['name'] as String? ?? 'Unknown';
-                  final state = svc['state'] as String? ?? 'idle';
-                  final path = svc['path'] as String?;
-                  final isConn = state == 'ready' || state == 'online';
-                  return ListTile(
-                    dense: true,
-                    leading: Icon(Icons.wifi,
-                        color: isConn ? Colors.green : null, size: 20),
-                    title: Text(name),
-                    subtitle: Text(isConn ? 'Connected' : 'Saved'),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      tooltip: 'Forget',
-                      onPressed: () {
-                        if (path != null) _removeService(path);
-                      },
-                    ),
-                    onTap: () => _showServiceOptions(context, svc),
-                  );
-                }).toList(),
-              ),
-              crossFadeState: _showSavedExpanded
-                  ? CrossFadeState.showSecond
-                  : CrossFadeState.showFirst,
-              duration: const Duration(milliseconds: 200),
-            ),
-            const Divider(height: 1),
-          ],
-
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Text('Available Networks',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          ),
-
           Expanded(
             child: _isWifiPowered
-                ? ListView.builder(
-                    itemCount: _wifiServices.length,
-                    itemBuilder: (ctx, i) {
-                      final svc = _wifiServices[i];
-                      final name =
-                          svc['name'] as String? ?? 'Unknown network';
-                      final state = svc['state'] as String? ?? 'idle';
-                      final strength = svc['strength'] as int? ?? 0;
-                      final security = svc['security'] as String? ?? '';
-                      final isConn = state == 'ready' || state == 'online';
-
-                      IconData wifiIcon;
-                      if (isConn) {
-                        wifiIcon = Icons.wifi;
-                      } else if (strength >= 67) {
-                        wifiIcon = Icons.network_wifi;
-                      } else if (strength >= 34) {
-                        wifiIcon = Icons.network_wifi_2_bar;
-                      } else if (strength > 0) {
-                        wifiIcon = Icons.network_wifi_1_bar;
-                      } else {
-                        wifiIcon = Icons.signal_wifi_0_bar;
-                      }
-
-                      return ListTile(
-                        leading: Icon(
-                          wifiIcon,
-                          color: isConn ? Colors.green : null,
+                ? CustomScrollView(
+                    slivers: [
+                      // Saved Networks Section
+                      if (savedNetworks.isNotEmpty) ...[
+                        const SliverPadding(
+                          padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                          sliver: SliverToBoxAdapter(
+                            child: Text('Saved Networks',
+                                style: TextStyle(
+                                    fontSize: 18, fontWeight: FontWeight.bold)),
+                          ),
                         ),
-                        title: Text(name,
-                            style: TextStyle(
-                                fontWeight: isConn
-                                    ? FontWeight.bold
-                                    : FontWeight.normal)),
-                        subtitle: Text(
-                          '$state • '
-                          '${security.isNotEmpty ? security : "Open"} • '
-                          '$strength%',
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (ctx, i) => _buildServiceTile(savedNetworks[i]),
+                            childCount: savedNetworks.length,
+                          ),
                         ),
-                        trailing: isConn
-                            ? const Icon(Icons.check, color: Colors.green)
-                            : null,
-                        onTap: () => _showServiceOptions(ctx, svc),
-                      );
-                    },
+                      ],
+
+                      // Available Networks Section
+                      const SliverPadding(
+                        padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
+                        sliver: SliverToBoxAdapter(
+                          child: Text('Available Networks',
+                              style: TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      if (otherNetworks.isEmpty)
+                        const SliverFillRemaining(
+                          hasScrollBody: false,
+                          child: Center(
+                            child: Text('No other networks found.'),
+                          ),
+                        )
+                      else
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (ctx, i) => _buildServiceTile(otherNetworks[i]),
+                            childCount: otherNetworks.length,
+                          ),
+                        ),
+                      
+                      const SliverToBoxAdapter(child: SizedBox(height: 40)),
+                    ],
                   )
                 : const Center(
-                    child:
-                        Text('Turn on Wi-Fi to see available networks.')),
+                    child: Text('Turn on Wi-Fi to see available networks.')),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildServiceTile(Map<String, dynamic> svc) {
+    final name = svc['name'] as String? ?? 'Unknown network';
+    final state = svc['state'] as String? ?? 'idle';
+    final strength = svc['strength'] as int? ?? 0;
+    final security = svc['security'] as String? ?? '';
+    final isConn = state == 'ready' || state == 'online';
+
+    IconData wifiIcon;
+    if (isConn) {
+      wifiIcon = Icons.wifi;
+    } else if (strength >= 67) {
+      wifiIcon = Icons.network_wifi;
+    } else if (strength >= 34) {
+      wifiIcon = Icons.network_wifi_2_bar;
+    } else if (strength > 0) {
+      wifiIcon = Icons.network_wifi_1_bar;
+    } else {
+      wifiIcon = Icons.signal_wifi_0_bar;
+    }
+
+    return ListTile(
+      leading: Icon(
+        wifiIcon,
+        color: isConn ? Colors.green : null,
+      ),
+      title: Text(name,
+          style: TextStyle(
+              fontWeight: isConn ? FontWeight.bold : FontWeight.normal)),
+      subtitle: Text(
+        '$state • '
+        '${security.isNotEmpty ? security : "Open"} • '
+        '$strength%',
+      ),
+      trailing: isConn
+          ? const Icon(Icons.check, color: Colors.green)
+          : (svc['favorite'] == true || svc['autoConnect'] == true
+              ? const Icon(Icons.star, color: Colors.orange, size: 16)
+              : null),
+      onTap: () => _showServiceOptions(context, svc),
     );
   }
 }
