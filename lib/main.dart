@@ -275,6 +275,17 @@ class _WifiPageState extends State<WifiPage> {
 
   Future<void> _toggleWifi(bool value) async {
     if (mounted) setState(() => _isBusy = true);
+
+    // When enabling Wi-Fi, make sure the hardware is unblocked first.
+    if (value) {
+      try {
+        await Process.run('rfkill', ['unblock', 'wifi']);
+        await Process.run('ip', ['link', 'set', 'wlan0', 'up']);
+      } catch (e) {
+        debugPrint('Wi-Fi hw setup error: $e');
+      }
+    }
+
     final success = await ConnmanService.setWifiPowered(value);
     if (!success && mounted) {
       _showSnack('Failed to toggle Wi-Fi power.');
