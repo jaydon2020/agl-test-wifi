@@ -62,51 +62,79 @@ Future<Map<String, String>?> _showPasswordDialog(
     context: context,
     barrierDismissible: false,
     builder: (ctx) {
-      return AlertDialog(
-        title: const Text('Wi-Fi Password Required'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Network: $ssidHint',
-              style: const TextStyle(fontSize: 12),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 16),
-            ...fields.map(
-              (field) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: TextField(
-                  controller: controllers[field],
-                  obscureText: field.toLowerCase().contains('passphrase') ||
-                      field.toLowerCase().contains('password'),
-                  decoration: InputDecoration(
-                    labelText: field,
-                    border: const OutlineInputBorder(),
-                  ),
-                  autofocus: true,
-                  onSubmitted: (_) => Navigator.of(ctx).pop(
-                    {for (final f in fields) f: controllers[f]!.text},
-                  ),
+      // Track obscure state per field so each can be toggled independently.
+      final obscureState = {
+        for (final f in fields)
+          f: f.toLowerCase().contains('passphrase') ||
+              f.toLowerCase().contains('password'),
+      };
+
+      return StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            title: const Text('Wi-Fi Password Required'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Network: $ssidHint',
+                  style: const TextStyle(fontSize: 12),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
+                const SizedBox(height: 16),
+                ...fields.map(
+                  (field) {
+                    final isSecret =
+                        field.toLowerCase().contains('passphrase') ||
+                            field.toLowerCase().contains('password');
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: TextField(
+                        controller: controllers[field],
+                        obscureText: obscureState[field] ?? false,
+                        decoration: InputDecoration(
+                          labelText: field,
+                          border: const OutlineInputBorder(),
+                          suffixIcon: isSecret
+                              ? IconButton(
+                                  icon: Icon(
+                                    obscureState[field] == true
+                                        ? Icons.visibility_off
+                                        : Icons.visibility,
+                                  ),
+                                  onPressed: () => setDialogState(() {
+                                    obscureState[field] =
+                                        !(obscureState[field] ?? false);
+                                  }),
+                                )
+                              : null,
+                        ),
+                        autofocus: true,
+                        onSubmitted: (_) => Navigator.of(ctx).pop(
+                          {for (final f in fields) f: controllers[f]!.text},
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null), // Cancel
+                child: const Text('Cancel'),
               ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(null), // Cancel
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(
-              {for (final f in fields) f: controllers[f]!.text},
-            ),
-            child: const Text('Connect'),
-          ),
-        ],
+              ElevatedButton(
+                onPressed: () => Navigator.of(ctx).pop(
+                  {for (final f in fields) f: controllers[f]!.text},
+                ),
+                child: const Text('Connect'),
+              ),
+            ],
+          );
+        },
       );
     },
   );
@@ -137,8 +165,9 @@ class _WifiPageState extends State<WifiPage> {
   // Async helpers
   bool _isRefreshing = false; // guarded inside _refreshWifiStatus
   bool _isBusy = false;       // set by scan/connect/disconnect actions
+  bool _showSavedExpanded = false;
   StreamSubscription<dynamic>? _eventSub;
-  static const _eventChannel = EventChannel('com.toyota.connman/events');
+  static const _eventChannel = EventChannel('io.github.jaydon2020/events');
 
   @override
   void initState() {
@@ -190,12 +219,23 @@ class _WifiPageState extends State<WifiPage> {
     if (type == 'servicesChanged') {
       final rawList = event['services'] as List? ?? [];
       setState(() {
+        _isBusy = false; // Action completed — clear busy flag.
         _wifiServices = rawList
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
         // Derive overall connected state.
         _isConnected = _wifiServices
             .any((s) => s['state'] == 'ready' || s['state'] == 'online');
+      });
+    } else if (type == 'technologyChanged') {
+      // Update Wi-Fi powered state from D-Bus signal.
+      final powered = event['powered'] as bool?;
+      final connected = event['connected'] as bool?;
+      setState(() {
+        _isBusy = false;
+        if (powered != null) _isWifiPowered = powered;
+        if (connected != null) _isConnected = connected;
+        if (_isWifiPowered == false) _wifiServices = [];
       });
     }
   }
@@ -236,41 +276,62 @@ class _WifiPageState extends State<WifiPage> {
   Future<void> _toggleWifi(bool value) async {
     if (mounted) setState(() => _isBusy = true);
     final success = await ConnmanService.setWifiPowered(value);
-    if (!success && mounted) _showSnack('Failed to toggle Wi-Fi power.');
-    await Future.delayed(const Duration(seconds: 1));
-    await _refreshWifiStatus();
+    if (!success && mounted) {
+      _showSnack('Failed to toggle Wi-Fi power.');
+      setState(() => _isBusy = false);
+      return;
+    }
+    // Lightweight fallback: fetch technology state in case no
+    // technologyChanged event is emitted by the C++ plugin.
+    final techInfo = await ConnmanService.getWifiTechnology();
+    if (techInfo != null && mounted) {
+      setState(() {
+        _isWifiPowered = techInfo['powered'] as bool? ?? false;
+        _isConnected = techInfo['connected'] as bool? ?? false;
+        if (!_isWifiPowered) _wifiServices = [];
+        _isBusy = false;
+      });
+    }
   }
 
   Future<void> _scanWifi() async {
     if (mounted) setState(() => _isBusy = true);
     final success = await ConnmanService.scanWifi();
-    if (!success && mounted) _showSnack('Failed to scan for Wi-Fi.');
-    await Future.delayed(const Duration(seconds: 2));
-    await _refreshWifiStatus();
+    if (!success && mounted) {
+      _showSnack('Failed to scan for Wi-Fi.');
+      setState(() => _isBusy = false);
+    }
+    // EventChannel will deliver servicesChanged — no poll needed.
   }
 
   Future<void> _connectService(String path) async {
     if (mounted) setState(() => _isBusy = true);
     final success = await ConnmanService.connectService(path);
-    if (!success && mounted) _showSnack('Failed to connect to network.');
-    await Future.delayed(const Duration(seconds: 2));
-    await _refreshWifiStatus();
+    if (!success && mounted) {
+      _showSnack('Failed to connect to network.');
+      setState(() => _isBusy = false);
+    }
+    // EventChannel will deliver servicesChanged — no poll needed.
   }
 
   Future<void> _disconnectService(String path) async {
     if (mounted) setState(() => _isBusy = true);
     final success = await ConnmanService.disconnectService(path);
-    if (!success && mounted) _showSnack('Failed to disconnect from network.');
-    await Future.delayed(const Duration(seconds: 2));
-    await _refreshWifiStatus();
+    if (!success && mounted) {
+      _showSnack('Failed to disconnect from network.');
+      setState(() => _isBusy = false);
+    }
+    // EventChannel will deliver servicesChanged — no poll needed.
   }
 
   Future<void> _removeService(String path) async {
     if (mounted) setState(() => _isBusy = true);
     final success = await ConnmanService.removeService(path);
-    if (!success && mounted) _showSnack('Failed to forget network.');
-    await Future.delayed(const Duration(seconds: 1));
-    await _refreshWifiStatus();
+    if (!success && mounted) {
+      _showSnack('Failed to forget network.');
+      setState(() => _isBusy = false);
+    }
+    // EventChannel will deliver servicesChanged — no poll needed.
   }
 
   void _showSnack(String msg) {
@@ -338,6 +399,10 @@ class _WifiPageState extends State<WifiPage> {
 
   @override
   Widget build(BuildContext context) {
+    final savedNetworks = _wifiServices
+        .where((s) => s['favorite'] == true)
+        .toList();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('AGL Wi-Fi Demo'),
@@ -407,6 +472,58 @@ class _WifiPageState extends State<WifiPage> {
             ),
           ),
 
+          // Saved Networks — expandable section
+          if (_isWifiPowered && savedNetworks.isNotEmpty) ...[
+            InkWell(
+              onTap: () => setState(() => _showSavedExpanded = !_showSavedExpanded),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text('Saved Networks',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    ),
+                    Icon(_showSavedExpanded
+                        ? Icons.expand_less
+                        : Icons.expand_more),
+                  ],
+                ),
+              ),
+            ),
+            AnimatedCrossFade(
+              firstChild: const SizedBox.shrink(),
+              secondChild: Column(
+                children: savedNetworks.map((svc) {
+                  final name = svc['name'] as String? ?? 'Unknown';
+                  final state = svc['state'] as String? ?? 'idle';
+                  final path = svc['path'] as String?;
+                  final isConn = state == 'ready' || state == 'online';
+                  return ListTile(
+                    dense: true,
+                    leading: Icon(Icons.wifi,
+                        color: isConn ? Colors.green : null, size: 20),
+                    title: Text(name),
+                    subtitle: Text(isConn ? 'Connected' : 'Saved'),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline, size: 20),
+                      tooltip: 'Forget',
+                      onPressed: () {
+                        if (path != null) _removeService(path);
+                      },
+                    ),
+                    onTap: () => _showServiceOptions(context, svc),
+                  );
+                }).toList(),
+              ),
+              crossFadeState: _showSavedExpanded
+                  ? CrossFadeState.showSecond
+                  : CrossFadeState.showFirst,
+              duration: const Duration(milliseconds: 200),
+            ),
+            const Divider(height: 1),
+          ],
+
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Text('Available Networks',
@@ -426,11 +543,22 @@ class _WifiPageState extends State<WifiPage> {
                       final security = svc['security'] as String? ?? '';
                       final isConn = state == 'ready' || state == 'online';
 
+                      IconData wifiIcon;
+                      if (isConn) {
+                        wifiIcon = Icons.wifi;
+                      } else if (strength >= 67) {
+                        wifiIcon = Icons.network_wifi;
+                      } else if (strength >= 34) {
+                        wifiIcon = Icons.network_wifi_2_bar;
+                      } else if (strength > 0) {
+                        wifiIcon = Icons.network_wifi_1_bar;
+                      } else {
+                        wifiIcon = Icons.signal_wifi_0_bar;
+                      }
+
                       return ListTile(
                         leading: Icon(
-                          isConn
-                              ? Icons.wifi
-                              : Icons.signal_wifi_4_bar,
+                          wifiIcon,
                           color: isConn ? Colors.green : null,
                         ),
                         title: Text(name,

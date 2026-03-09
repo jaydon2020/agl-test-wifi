@@ -7,7 +7,7 @@ import 'package:flutter/foundation.dart';
 /// * The `requestInput` callback is invoked FROM C++ → Dart when ConnMan needs
 ///   a passphrase.  Register [onRequestInput] before using the service.
 class ConnmanService {
-  static const MethodChannel _channel = MethodChannel('com.toyota.connman');
+  static const MethodChannel _channel = MethodChannel('io.github.jaydon2020');
 
   /// Optional callback invoked when C++ asks for user credentials.
   ///
