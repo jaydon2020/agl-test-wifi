@@ -134,8 +134,11 @@ class _WifiPageState extends State<WifiPage> {
 
   Future<void> _initSystemWifi() async {
     try {
+      // Ensure hardware is enabled at startup
       await Process.run('rfkill', ['unblock', 'wifi']);
       await Process.run('ip', ['link', 'set', 'wlan0', 'up']);
+      // Brief delay for the wireless interface to register with ConnMan
+      await Future.delayed(const Duration(seconds: 1));
     } catch (e) {
       debugPrint('System wifi setup error: $e');
     }
@@ -204,13 +207,13 @@ class _WifiPageState extends State<WifiPage> {
 
     final techInfo = await ConnmanService.getWifiTechnology();
     if (techInfo != null) {
-      _isWifiPowered = techInfo['powered'] as bool? ?? false;
+      _isWifiPowered = (techInfo['powered'] ?? techInfo['Powered']) == true;
     }
 
     if (_isWifiPowered) {
       final results = await ConnmanService.getWifiServices();
+      // ... (normalization logic)
       _wifiServices = results.map((svc) {
-        // Normalize keys here as well
         return {
           'name': svc['name'] ?? svc['Name'],
           'state': svc['state'] ?? svc['State'],
@@ -222,11 +225,6 @@ class _WifiPageState extends State<WifiPage> {
           ...svc,
         };
       }).toList();
-
-      if (_wifiServices.isNotEmpty) {
-        debugPrint('First wifi service keys: ${_wifiServices.first.keys}');
-        debugPrint('First wifi service: ${_wifiServices.first}');
-      }
     } else {
       _wifiServices = [];
     }
@@ -243,29 +241,27 @@ class _WifiPageState extends State<WifiPage> {
 
   Future<void> _toggleWifi(bool value) async {
     if (mounted) setState(() => _isToggling = true);
+    
     if (value) {
       try {
+        // Force hardware up before enabling in ConnMan
         await Process.run('rfkill', ['unblock', 'wifi']);
         await Process.run('ip', ['link', 'set', 'wlan0', 'up']);
-        await Future.delayed(const Duration(seconds: 2));
+        await Future.delayed(const Duration(seconds: 1));
       } catch (e) {
         debugPrint('Wi-Fi hw setup error: $e');
       }
     }
 
     try {
+      // Call ConnMan to set power state
       await ConnmanService.setWifiPowered(value);
+      
       if (value) {
         await _startMonitoring();
-        final techInfo = await ConnmanService.getWifiTechnology();
-        if (techInfo != null && mounted) {
-          setState(() {
-            _isWifiPowered = techInfo['powered'] as bool? ?? false;
-          });
-          if (_isWifiPowered) {
-            _wifiServices = await ConnmanService.getWifiServices();
-          }
-        }
+        // Wait a bit and refresh status
+        await Future.delayed(const Duration(seconds: 1));
+        await _refreshWifiStatus();
       } else {
         await _stopMonitoring();
         if (mounted) {
@@ -282,7 +278,31 @@ class _WifiPageState extends State<WifiPage> {
 
   Future<void> _scanWifi() async {
     if (mounted) setState(() => _isBusy = true);
-    await ConnmanService.scanWifi();
+
+    try {
+      bool success = await ConnmanService.scanWifi();
+      if (!success) {
+        debugPrint('Wi-Fi scan failed or not implemented, attempting hardware re-init...');
+        // Attempt to unblock and bring the link up
+        await Process.run('rfkill', ['unblock', 'wifi']);
+        await Process.run('ip', ['link', 'set', 'wlan0', 'up']);
+
+        // Give it a moment to settle
+        await Future.delayed(const Duration(seconds: 1));
+
+        // Retry the scan
+        success = await ConnmanService.scanWifi();
+      }
+
+      // If still not successful, try to refresh the status anyway as it might have recovered
+      if (!success) {
+        await _refreshWifiStatus();
+      }
+    } catch (e) {
+      debugPrint('Error during scan handle: $e');
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
   }
 
   Future<void> _connectService(String path) async {
