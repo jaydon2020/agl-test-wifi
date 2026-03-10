@@ -36,6 +36,231 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Saved Networks Page
+// ---------------------------------------------------------------------------
+
+class SavedNetworksPage extends StatefulWidget {
+  const SavedNetworksPage({super.key});
+
+  @override
+  State<SavedNetworksPage> createState() => _SavedNetworksPageState();
+}
+
+class _SavedNetworksPageState extends State<SavedNetworksPage> {
+  List<Map<String, String>> _savedNetworks = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedNetworks();
+  }
+
+  Future<void> _loadSavedNetworks() async {
+    setState(() => _isLoading = true);
+    final networks = <Map<String, String>>[];
+
+    try {
+      final dir = Directory('/var/lib/connman');
+      if (await dir.exists()) {
+        final entries = dir.listSync();
+        for (final entry in entries) {
+          if (entry is Directory) {
+            final folderName = entry.path.split('/').last;
+            if (folderName.startsWith('wifi_')) {
+              final settingsFile = File('${entry.path}/settings');
+              if (await settingsFile.exists()) {
+                final content = await settingsFile.readAsLines();
+
+                String? name;
+                String? passphrase;
+                String? autoconnect;
+                String? modified;
+
+                for (final line in content) {
+                  if (line.startsWith('Name=')) name = line.substring(5);
+                  else if (line.startsWith('Passphrase=')) passphrase = line.substring(11);
+                  else if (line.startsWith('AutoConnect=')) autoconnect = line.substring(12);
+                  else if (line.startsWith('Modified=')) modified = line.substring(9);
+                }
+
+                if (name != null) {
+                  networks.add({
+                    'id': folderName,
+                    'path': '/net/connman/service/$folderName',
+                    'name': name,
+                    'passphrase': passphrase ?? '',
+                    'autoconnect': autoconnect ?? 'false',
+                    'modified': modified ?? '',
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error reading saved networks: $e');
+    }
+
+    if (mounted) {
+      setState(() {
+        _savedNetworks = networks;
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _forgetNetwork(String path, String name) async {
+    try {
+      final success = await ConnmanService.removeService(path);
+      if (success) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Forgot network: $name')),
+          );
+          _loadSavedNetworks(); // refresh
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to forget network: $name'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error forgetting network $path: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Saved Networks'),
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _savedNetworks.isEmpty
+              ? const Center(child: Text('No saved networks found', style: TextStyle(fontSize: 16)))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16.0),
+                  itemCount: _savedNetworks.length,
+                  itemBuilder: (context, index) {
+                    final net = _savedNetworks[index];
+                    return _SavedNetworkCard(
+                      network: net,
+                      onForget: () => _forgetNetwork(net['path']!, net['name']!),
+                    );
+                  },
+                ),
+    );
+  }
+}
+
+class _SavedNetworkCard extends StatefulWidget {
+  final Map<String, String> network;
+  final VoidCallback onForget;
+
+  const _SavedNetworkCard({
+    required this.network,
+    required this.onForget,
+  });
+
+  @override
+  State<_SavedNetworkCard> createState() => _SavedNetworkCardState();
+}
+
+class _SavedNetworkCardState extends State<_SavedNetworkCard> {
+  bool _showPassword = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = widget.network['name']!;
+    final passphrase = widget.network['passphrase']!;
+    final autoconnect = widget.network['autoconnect'] == 'true';
+    final hasPassword = passphrase.isNotEmpty;
+
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.only(bottom: 16.0),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header: Name and AutoConnect icon
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    name,
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (autoconnect)
+                  const Tooltip(
+                    message: 'Auto-connects',
+                    child: Icon(Icons.autorenew, color: Colors.blue),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // Password Section
+            Row(
+              children: [
+                const Icon(Icons.lock_outline, size: 20, color: Colors.grey),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    hasPassword
+                        ? (_showPassword ? passphrase : '•' * passphrase.length)
+                        : 'No password',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 14,
+                      color: hasPassword ? Colors.black87 : Colors.grey,
+                    ),
+                  ),
+                ),
+                if (hasPassword)
+                  IconButton(
+                    icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () => setState(() => _showPassword = !_showPassword),
+                    tooltip: _showPassword ? 'Hide password' : 'Show password',
+                  ),
+              ],
+            ),
+
+            const Divider(height: 24),
+
+            // Actions
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  label: const Text('Forget', style: TextStyle(color: Colors.red)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.red),
+                  ),
+                  onAction: () => widget.onForget(),
+                  onPressed: widget.onForget,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Global navigator key so that `ConnmanService.onRequestInput` can push a
 /// dialog even though it is called outside of any widget context.
 final _navigatorKey = GlobalKey<NavigatorState>();
@@ -476,6 +701,20 @@ class _WifiPageState extends State<WifiPage> {
             icon: const Icon(Icons.refresh),
             tooltip: 'Scan for networks',
             onPressed: (_isWifiPowered && !_isBusy) ? _scanWifi : null,
+          ),
+          IconButton(
+            icon: const Icon(Icons.bookmark),
+            tooltip: 'Saved Networks',
+            onPressed: _isWifiPowered
+                ? () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const SavedNetworksPage(),
+                      ),
+                    ).then((_) => _refreshWifiStatus());
+                  }
+                : null,
           ),
           const SizedBox(width: 8),
         ],
