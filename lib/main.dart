@@ -410,7 +410,7 @@ class _WifiPageState extends State<WifiPage> {
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
               child: SizedBox(
-                  width: 20, height: 20, child: CircularProgressIndicator()),
+                  width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
             ),
           Switch(
             value: _isWifiPowered,
@@ -418,27 +418,10 @@ class _WifiPageState extends State<WifiPage> {
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
+            tooltip: 'Scan for networks',
             onPressed: (_isWifiPowered && !_isBusy) ? _scanWifi : null,
           ),
-          IconButton(
-            icon: const Icon(Icons.bookmark),
-            tooltip: 'Saved Networks',
-            onPressed: _isWifiPowered
-                ? () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => SavedNetworksPage(
-                          services: _wifiServices,
-                          onRemove: (path) => _removeService(path),
-                          onConnect: (path) => _connectService(path),
-                          onDisconnect: (path) => _disconnectService(path),
-                        ),
-                      ),
-                    );
-                  }
-                : null,
-          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: _isWifiPowered
@@ -450,49 +433,146 @@ class _WifiPageState extends State<WifiPage> {
   }
 
   Widget _buildGroupedList() {
-    final saved = _wifiServices.where((s) => s['favorite'] == true).toList();
-    final available = _wifiServices.where((s) => s['favorite'] != true).toList();
+    // Separate into Connected, Saved, and Available networks.
+    final connected = _wifiServices.where((s) => s['state'] == 'ready' || s['state'] == 'online').toList();
+    // Exclude connected from saved to avoid duplication.
+    final saved = _wifiServices.where((s) => s['favorite'] == true && s['state'] != 'ready' && s['state'] != 'online').toList();
+    // Available: neither connected nor saved.
+    final available = _wifiServices.where((s) => s['favorite'] != true && s['state'] != 'ready' && s['state'] != 'online').toList();
 
     return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
       children: [
+        if (connected.isNotEmpty) ...[
+          _buildSectionHeader('CONNECTED'),
+          ...connected.map((svc) => _buildConnectedCard(svc)),
+          const SizedBox(height: 16),
+        ],
         if (saved.isNotEmpty) ...[
-          const ListTile(
-            title: Text('SAVED NETWORKS',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+          _buildSectionHeader('SAVED NETWORKS'),
           ...saved.map((svc) => _buildServiceTile(svc)),
-          const Divider(),
+          const Divider(height: 32),
         ],
         if (available.isNotEmpty) ...[
-          const ListTile(
-            title: Text('AVAILABLE NETWORKS',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+          _buildSectionHeader('AVAILABLE NETWORKS'),
           ...available.map((svc) => _buildServiceTile(svc)),
         ],
       ],
     );
   }
 
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+          letterSpacing: 1.2,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+      ),
+    );
+  }
+
+  Widget _getWifiIcon(int strength, String security, {bool connected = false}) {
+    final isSecure = security != 'none' && security != '';
+    IconData iconData;
+
+    if (strength > 75) {
+      iconData = isSecure ? Icons.signal_wifi_4_bar_lock : Icons.signal_wifi_4_bar;
+    } else if (strength > 50) {
+      iconData = isSecure ? Icons.network_wifi_3_bar : Icons.network_wifi_3_bar; // fallback lock handling
+    } else if (strength > 25) {
+      iconData = isSecure ? Icons.network_wifi_2_bar : Icons.network_wifi_2_bar;
+    } else {
+      iconData = isSecure ? Icons.network_wifi_1_bar : Icons.network_wifi_1_bar;
+    }
+
+    // For Material Icons, standard "signal_wifi_X_bar" icons look best.
+    // We can simulate the lock with a badge if preferred, or just rely on standard icons.
+    if (isSecure && strength <= 75) {
+       iconData = Icons.wifi_lock; // Generic fallback if precise bar+lock isn't available
+    }
+
+    return Icon(
+      iconData,
+      color: connected ? Theme.of(context).colorScheme.primary : Colors.grey[700],
+      size: 28,
+    );
+  }
+
+  String _formatState(String state) {
+    switch (state) {
+      case 'idle':
+        return 'Not connected';
+      case 'association':
+      case 'configuration':
+        return 'Connecting...';
+      case 'ready':
+      case 'online':
+        return 'Connected';
+      case 'failure':
+        return 'Failed to connect';
+      case 'disconnect':
+        return 'Disconnecting...';
+      default:
+        return state[0].toUpperCase() + state.substring(1);
+    }
+  }
+
+  Widget _buildConnectedCard(Map<String, dynamic> svc) {
+    final name = svc['name'] as String? ?? 'Unknown';
+    final state = svc['state'] as String? ?? 'idle';
+    final strength = (svc['strength'] as num?)?.toInt() ?? 100;
+    final security = (svc['security'] as List?)?.join(', ') ?? 'none';
+
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(vertical: 4.0),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+        leading: _getWifiIcon(strength, security, connected: true),
+        title: Text(
+          name,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        subtitle: Text(
+          _formatState(state),
+          style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer),
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.info_outline),
+          onPressed: () => _showServiceOptions(context, svc),
+        ),
+        onTap: () => _showServiceOptions(context, svc),
+      ),
+    );
+  }
+
   Widget _buildServiceTile(Map<String, dynamic> svc) {
     final name = svc['name'] as String? ?? 'Unknown';
     final state = svc['state'] as String? ?? 'idle';
-    final isConn = state == 'ready' || state == 'online';
     final isFavorite = svc['favorite'] == true;
+    final strength = (svc['strength'] as num?)?.toInt() ?? 100;
+    final security = (svc['security'] as List?)?.join(', ') ?? 'none';
+
+    String subtitleText = isFavorite && state == 'idle' ? 'Saved' : _formatState(state);
+    if (state == 'idle' && !isFavorite) {
+       subtitleText = security != 'none' ? 'Secured' : 'Open';
+    }
 
     return ListTile(
-      leading: Icon(isConn
-          ? Icons.wifi
-          : (isFavorite ? Icons.wifi_protected_setup : Icons.wifi_lock)),
-      title: Text(name),
-      subtitle: Text(state),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (isFavorite) const Icon(Icons.star, color: Colors.amber, size: 16),
-          if (isConn) const Icon(Icons.check, color: Colors.green),
-        ],
-      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
+      leading: _getWifiIcon(strength, security),
+      title: Text(name, style: const TextStyle(fontSize: 16)),
+      subtitle: Text(subtitleText),
+      trailing: isFavorite
+          ? const Icon(Icons.bookmark, color: Colors.grey, size: 20)
+          : null,
       onTap: () => _showServiceOptions(context, svc),
     );
   }
