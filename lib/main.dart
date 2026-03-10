@@ -169,15 +169,26 @@ class _WifiPageState extends State<WifiPage> {
       final rawList = event['services'] as List? ?? [];
       setState(() {
         _isBusy = false;
-        _wifiServices = rawList
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
+        _wifiServices = rawList.map((e) {
+          final svc = Map<String, dynamic>.from(e as Map);
+          // Normalize keys to handle both lowercase and standard D-Bus casing
+          return {
+            'name': svc['name'] ?? svc['Name'],
+            'state': svc['state'] ?? svc['State'],
+            'favorite': svc['favorite'] ?? svc['Favorite'],
+            'path': svc['path'] ?? svc['Path'],
+            'type': svc['type'] ?? svc['Type'],
+            'security': svc['security'] ?? svc['Security'],
+            'strength': svc['strength'] ?? svc['Strength'],
+            ...svc, // Keep original keys too
+          };
+        }).toList();
       });
     } else if (type == 'technologyChanged') {
-      final powered = event['powered'] as bool?;
+      final powered = event['powered'] ?? event['Powered'];
       setState(() {
         _isBusy = false;
-        if (powered != null) _isWifiPowered = powered;
+        if (powered is bool) _isWifiPowered = powered;
         if (_isWifiPowered == false) _wifiServices = [];
       });
     }
@@ -197,7 +208,25 @@ class _WifiPageState extends State<WifiPage> {
     }
 
     if (_isWifiPowered) {
-      _wifiServices = await ConnmanService.getWifiServices();
+      final results = await ConnmanService.getWifiServices();
+      _wifiServices = results.map((svc) {
+        // Normalize keys here as well
+        return {
+          'name': svc['name'] ?? svc['Name'],
+          'state': svc['state'] ?? svc['State'],
+          'favorite': svc['favorite'] ?? svc['Favorite'],
+          'path': svc['path'] ?? svc['Path'],
+          'type': svc['type'] ?? svc['Type'],
+          'security': svc['security'] ?? svc['Security'],
+          'strength': svc['strength'] ?? svc['Strength'],
+          ...svc,
+        };
+      }).toList();
+
+      if (_wifiServices.isNotEmpty) {
+        debugPrint('First wifi service keys: ${_wifiServices.first.keys}');
+        debugPrint('First wifi service: ${_wifiServices.first}');
+      }
     } else {
       _wifiServices = [];
     }
