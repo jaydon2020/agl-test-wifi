@@ -339,16 +339,57 @@ class _WifiPageState extends State<WifiPage> {
             icon: const Icon(Icons.refresh),
             onPressed: (_isWifiPowered && !_isBusy) ? _scanWifi : null,
           ),
+          IconButton(
+            icon: const Icon(Icons.bookmark),
+            tooltip: 'Saved Networks',
+            onPressed: _isWifiPowered
+                ? () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => SavedNetworksPage(
+                          services: _wifiServices,
+                          onRemove: (path) => _removeService(path),
+                          onConnect: (path) => _connectService(path),
+                          onDisconnect: (path) => _disconnectService(path),
+                        ),
+                      ),
+                    );
+                  }
+                : null,
+          ),
         ],
       ),
       body: _isWifiPowered
           ? _wifiServices.isEmpty
               ? const Center(child: Text('No networks found'))
-              : ListView.builder(
-                  itemCount: _wifiServices.length,
-                  itemBuilder: (ctx, i) => _buildServiceTile(_wifiServices[i]),
-                )
+              : _buildGroupedList()
           : const Center(child: Text('Wi-Fi is disabled')),
+    );
+  }
+
+  Widget _buildGroupedList() {
+    final saved = _wifiServices.where((s) => s['favorite'] == true).toList();
+    final available = _wifiServices.where((s) => s['favorite'] != true).toList();
+
+    return ListView(
+      children: [
+        if (saved.isNotEmpty) ...[
+          const ListTile(
+            title: Text('SAVED NETWORKS',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+          ),
+          ...saved.map((svc) => _buildServiceTile(svc)),
+          const Divider(),
+        ],
+        if (available.isNotEmpty) ...[
+          const ListTile(
+            title: Text('AVAILABLE NETWORKS',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+          ),
+          ...available.map((svc) => _buildServiceTile(svc)),
+        ],
+      ],
     );
   }
 
@@ -356,13 +397,91 @@ class _WifiPageState extends State<WifiPage> {
     final name = svc['name'] as String? ?? 'Unknown';
     final state = svc['state'] as String? ?? 'idle';
     final isConn = state == 'ready' || state == 'online';
+    final isFavorite = svc['favorite'] == true;
 
     return ListTile(
-      leading: Icon(isConn ? Icons.wifi : Icons.wifi_lock),
+      leading: Icon(isConn
+          ? Icons.wifi
+          : (isFavorite ? Icons.wifi_protected_setup : Icons.wifi_lock)),
       title: Text(name),
       subtitle: Text(state),
-      trailing: isConn ? const Icon(Icons.check) : null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isFavorite) const Icon(Icons.star, color: Colors.amber, size: 16),
+          if (isConn) const Icon(Icons.check, color: Colors.green),
+        ],
+      ),
       onTap: () => _showServiceOptions(context, svc),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Saved Networks Page
+// ---------------------------------------------------------------------------
+
+class SavedNetworksPage extends StatelessWidget {
+  final List<Map<String, dynamic>> services;
+  final Function(String) onRemove;
+  final Function(String) onConnect;
+  final Function(String) onDisconnect;
+
+  const SavedNetworksPage({
+    super.key,
+    required this.services,
+    required this.onRemove,
+    required this.onConnect,
+    required this.onDisconnect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final savedServices = services.where((s) => s['favorite'] == true).toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Saved Networks'),
+      ),
+      body: savedServices.isEmpty
+          ? const Center(child: Text('No saved networks'))
+          : ListView.builder(
+              itemCount: savedServices.length,
+              itemBuilder: (context, index) {
+                final svc = savedServices[index];
+                final name = svc['name'] as String? ?? 'Unknown';
+                final state = svc['state'] as String? ?? 'idle';
+                final path = svc['path'] as String? ?? '';
+                final isConn = state == 'ready' || state == 'online';
+
+                return ListTile(
+                  leading: const Icon(Icons.wifi_protected_setup),
+                  title: Text(name),
+                  subtitle: Text('State: $state'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (isConn) const Icon(Icons.check, color: Colors.green),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () {
+                          onRemove(path);
+                          Navigator.pop(context);
+                        },
+                      ),
+                    ],
+                  ),
+                  onTap: () {
+                    if (isConn) {
+                      onDisconnect(path);
+                    } else {
+                      onConnect(path);
+                    }
+                    Navigator.pop(context);
+                  },
+                );
+              },
+            ),
     );
   }
 }
