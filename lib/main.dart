@@ -205,34 +205,36 @@ class _WifiPageState extends State<WifiPage> {
     if (_isRefreshing) return;
     if (mounted) setState(() => _isRefreshing = true);
 
-    final techInfo = await ConnmanService.getWifiTechnology();
-    if (techInfo != null) {
-      _isWifiPowered = (techInfo['powered'] ?? techInfo['Powered']) == true;
-    }
+    try {
+      final techInfo = await ConnmanService.getWifiTechnology();
+      if (techInfo != null) {
+        _isWifiPowered = (techInfo['powered'] ?? techInfo['Powered']) == true;
+      }
 
-    if (_isWifiPowered) {
-      final results = await ConnmanService.getWifiServices();
-      // ... (normalization logic)
-      _wifiServices = results.map((svc) {
-        return {
-          'name': svc['name'] ?? svc['Name'],
-          'state': svc['state'] ?? svc['State'],
-          'favorite': svc['favorite'] ?? svc['Favorite'],
-          'path': svc['path'] ?? svc['Path'],
-          'type': svc['type'] ?? svc['Type'],
-          'security': svc['security'] ?? svc['Security'],
-          'strength': svc['strength'] ?? svc['Strength'],
-          ...svc,
-        };
-      }).toList();
-    } else {
-      _wifiServices = [];
+      if (_isWifiPowered) {
+        final results = await ConnmanService.getWifiServices();
+        // ... (normalization logic)
+        _wifiServices = results.map((svc) {
+          return {
+            'name': svc['name'] ?? svc['Name'],
+            'state': svc['state'] ?? svc['State'],
+            'favorite': svc['favorite'] ?? svc['Favorite'],
+            'path': svc['path'] ?? svc['Path'],
+            'type': svc['type'] ?? svc['Type'],
+            'security': svc['security'] ?? svc['Security'],
+            'strength': svc['strength'] ?? svc['Strength'],
+            ...svc,
+          };
+        }).toList();
+      } else {
+        _wifiServices = [];
+      }
+    } finally {
+      if (mounted) setState(() {
+        _isRefreshing = false;
+        _isBusy = false;
+      });
     }
-
-    if (mounted) setState(() {
-      _isRefreshing = false;
-      _isBusy = false;
-    });
   }
 
   // ---------------------------------------------------------------------------
@@ -255,8 +257,14 @@ class _WifiPageState extends State<WifiPage> {
 
     try {
       // Call ConnMan to set power state
-      await ConnmanService.setWifiPowered(value);
+      final success = await ConnmanService.setWifiPowered(value);
       
+      if (!success) {
+        debugPrint('Failed to set Wi-Fi powered state to $value');
+        await _refreshWifiStatus();
+        return;
+      }
+
       if (value) {
         await _startMonitoring();
         // Wait a bit and refresh status
@@ -271,6 +279,9 @@ class _WifiPageState extends State<WifiPage> {
           });
         }
       }
+    } catch (e) {
+      debugPrint('Error toggling Wi-Fi: $e');
+      await _refreshWifiStatus();
     } finally {
       if (mounted) setState(() => _isToggling = false);
     }
@@ -307,17 +318,38 @@ class _WifiPageState extends State<WifiPage> {
 
   Future<void> _connectService(String path) async {
     if (mounted) setState(() => _isBusy = true);
-    await ConnmanService.connectService(path);
+    try {
+      final success = await ConnmanService.connectService(path);
+      if (!success) {
+        debugPrint('Failed to connect to service');
+      }
+    } finally {
+      // It is important to wait a short moment or check state from DBus.
+      // We rely on servicesChanged event to clear `_isBusy` on success,
+      // but we should clear it here if it fails, or after a timeout
+      // to avoid getting stuck. The underlying method has a timeout,
+      // so if it completes without the event clearing `_isBusy`, we
+      // should clear it.
+      if (mounted) setState(() => _isBusy = false);
+    }
   }
 
   Future<void> _disconnectService(String path) async {
     if (mounted) setState(() => _isBusy = true);
-    await ConnmanService.disconnectService(path);
+    try {
+      await ConnmanService.disconnectService(path);
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
   }
 
   Future<void> _removeService(String path) async {
     if (mounted) setState(() => _isBusy = true);
-    await ConnmanService.removeService(path);
+    try {
+      await ConnmanService.removeService(path);
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
   }
 
   // ---------------------------------------------------------------------------
