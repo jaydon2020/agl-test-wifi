@@ -461,6 +461,9 @@ class _WifiPageState extends State<WifiPage> {
 
       if (_isWifiPowered) {
         final results = await ConnmanService.getWifiServices();
+        if (results.isNotEmpty) {
+          debugPrint('DEBUG WIFI SERVICE 0: ${results[0]}');
+        }
         // ... (normalization logic)
         final mapped = results.map((svc) {
           return {
@@ -624,7 +627,8 @@ class _WifiPageState extends State<WifiPage> {
     final isConnectedSvc = state == 'ready' || state == 'online';
     final isFavorite = service['favorite'] == true;
     final strength = (service['strength'] as num?)?.toInt() ?? 0;
-    final security = (service['security'] as List?)?.join(', ') ?? 'none';
+    final securityRaw = service['security'];
+    final security = securityRaw is List ? securityRaw.join(', ') : (securityRaw?.toString() ?? 'none');
 
     showModalBottomSheet(
       context: ctx,
@@ -820,7 +824,8 @@ class _WifiPageState extends State<WifiPage> {
     final name = svc['name'] as String? ?? 'Unknown';
     final state = svc['state'] as String? ?? 'idle';
     final strength = (svc['strength'] as num?)?.toInt() ?? 100;
-    final security = (svc['security'] as List?)?.join(', ') ?? 'none';
+    final securityRaw = svc['security'];
+    final security = securityRaw is List ? securityRaw.join(', ') : (securityRaw?.toString() ?? 'none');
 
     return Card(
       elevation: 2,
@@ -852,7 +857,8 @@ class _WifiPageState extends State<WifiPage> {
     final state = svc['state'] as String? ?? 'idle';
     final isFavorite = svc['favorite'] == true;
     final strength = (svc['strength'] as num?)?.toInt() ?? 100;
-    final security = (svc['security'] as List?)?.join(', ') ?? 'none';
+    final securityRaw = svc['security'];
+    final security = securityRaw is List ? securityRaw.join(', ') : (securityRaw?.toString() ?? 'none');
 
     String subtitleText = isFavorite && state == 'idle' ? 'Saved' : _formatState(state);
     if (state == 'idle' && !isFavorite) {
