@@ -79,10 +79,15 @@ class _SavedNetworksPageState extends State<SavedNetworksPage> {
                 String? modified;
 
                 for (final line in content) {
-                  if (line.startsWith('Name=')) name = line.substring(5);
-                  else if (line.startsWith('Passphrase=')) passphrase = line.substring(11);
-                  else if (line.startsWith('AutoConnect=')) autoconnect = line.substring(12);
-                  else if (line.startsWith('Modified=')) modified = line.substring(9);
+                  if (line.startsWith('Name=')) {
+                    name = line.substring(5);
+                  } else if (line.startsWith('Passphrase=')) {
+                    passphrase = line.substring(11);
+                  } else if (line.startsWith('AutoConnect=')) {
+                    autoconnect = line.substring(12);
+                  } else if (line.startsWith('Modified=')) {
+                    modified = line.substring(9);
+                  }
                 }
 
                 if (name != null) {
@@ -275,7 +280,7 @@ Future<Map<String, String>?> _showPasswordDialog(
 
   final ssidHint = service.split('/').last;
   final controllers = {for (final f in fields) f: TextEditingController()};
-  bool _obscureText = true;
+  bool obscureText = true;
 
   final result = await showDialog<Map<String, String>>(
     context: context,
@@ -302,17 +307,17 @@ Future<Map<String, String>?> _showPasswordDialog(
                       suffixIcon: isPassword
                           ? IconButton(
                               icon: Icon(
-                                _obscureText ? Icons.visibility : Icons.visibility_off,
+                                obscureText ? Icons.visibility : Icons.visibility_off,
                               ),
                               onPressed: () {
                                 setState(() {
-                                  _obscureText = !_obscureText;
+                                  obscureText = !obscureText;
                                 });
                               },
                             )
                           : null,
                     ),
-                    obscureText: isPassword && _obscureText,
+                    obscureText: isPassword && obscureText,
                   );
                 }),
               ],
@@ -335,7 +340,9 @@ Future<Map<String, String>?> _showPasswordDialog(
     },
   );
 
-  for (final c in controllers.values) c.dispose();
+  for (final c in controllers.values) {
+    c.dispose();
+  }
   return result;
 }
 
@@ -411,38 +418,93 @@ class _WifiPageState extends State<WifiPage> {
   // EventChannel — incoming events from C++
   // ---------------------------------------------------------------------------
 
-  void _onEvent(dynamic raw) {
+  void _onEvent(dynamic raw) async {
     if (raw is! Map) return;
     final event = Map<String, dynamic>.from(raw);
     final type = event['type'] as String? ?? '';
 
     if (type == 'servicesChanged') {
       final rawList = event['services'] as List? ?? [];
-      setState(() {
-        _isBusy = false;
-        _wifiServices = rawList.map((e) {
-          final svc = Map<String, dynamic>.from(e as Map);
-          // Normalize keys to handle both lowercase and standard D-Bus casing
-          return {
-            'name': svc['name'] ?? svc['Name'],
-            'state': svc['state'] ?? svc['State'],
-            'favorite': svc['favorite'] ?? svc['Favorite'],
-            'path': svc['path'] ?? svc['Path'],
-            'type': svc['type'] ?? svc['Type'],
-            'security': svc['security'] ?? svc['Security'],
-            'strength': svc['strength'] ?? svc['Strength'],
-            ...svc, // Keep original keys too
-          };
-        }).toList();
-      });
-    } else if (type == 'technologyChanged') {
-      final powered = event['powered'] ?? event['Powered'];
-      setState(() {
-        _isBusy = false;
-        if (powered is bool) _isWifiPowered = powered;
-        if (_isWifiPowered == false) _wifiServices = [];
-      });
+      final processedServices = await _processWifiServices(rawList);
+      if (mounted) {
+        setState(() {
+          _isBusy = false;
+          _wifiServices = processedServices;
+        });
+      }
+    } else if (type == 'technologyPropertyChanged') {
+      if (event['name'] == 'Powered') {
+        final powered = event['value'];
+        if (mounted) {
+          setState(() {
+            _isBusy = false;
+            if (powered is bool) _isWifiPowered = powered;
+            if (_isWifiPowered == false) _wifiServices = [];
+          });
+        }
+      }
+    } else if (type == 'servicePropertyChanged') {
+      // Refresh the entire status if a service property (like State) changes,
+      // as it could indicate a connection or disconnection completed.
+      // E.g., State changed to 'ready', 'online', 'failure', 'idle'
+      if (event['name'] == 'State') {
+        await _refreshWifiStatus();
+      }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Processing helpers
+  // ---------------------------------------------------------------------------
+
+  /// Helper to get the saved network IDs from /var/lib/connman/
+  Future<Set<String>> _getSavedNetworkIds() async {
+    final savedIds = <String>{};
+    try {
+      final dir = Directory('/var/lib/connman');
+      if (await dir.exists()) {
+        final entries = dir.listSync();
+        for (final entry in entries) {
+          if (entry is Directory) {
+            final folderName = entry.path.split('/').last;
+            if (folderName.startsWith('wifi_')) {
+              savedIds.add('/net/connman/service/$folderName');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error reading saved network directories: $e');
+    }
+    return savedIds;
+  }
+
+  /// Helper to process the raw Wi-Fi services list from D-Bus into our internal UI state.
+  /// It normalizes keys, sets 'favorite' status from /var/lib/connman/, and filters out
+  /// unnamed hidden networks.
+  Future<List<Map<String, dynamic>>> _processWifiServices(List<dynamic> rawServices) async {
+    final savedIds = await _getSavedNetworkIds();
+
+    final mapped = rawServices.map((e) {
+      final svc = Map<String, dynamic>.from(e as Map);
+      final path = svc['path'] ?? svc['Path'];
+      return {
+        'name': svc['name'] ?? svc['Name'],
+        'state': svc['state'] ?? svc['State'],
+        // Set favorite true if this service's path exists as a saved configuration
+        'favorite': savedIds.contains(path),
+        'path': path,
+        'type': svc['type'] ?? svc['Type'],
+        'security': svc['security'] ?? svc['Security'],
+        'strength': svc['strength'] ?? svc['Strength'],
+        ...svc,
+      };
+    }).toList();
+
+    return mapped.where((svc) {
+      final name = svc['name'] as String?;
+      return name != null && name.trim().isNotEmpty;
+    }).toList();
   }
 
   // ---------------------------------------------------------------------------
@@ -464,33 +526,17 @@ class _WifiPageState extends State<WifiPage> {
         if (results.isNotEmpty) {
           debugPrint('DEBUG WIFI SERVICE 0: ${results[0]}');
         }
-        // ... (normalization logic)
-        final mapped = results.map((svc) {
-          return {
-            'name': svc['name'] ?? svc['Name'],
-            'state': svc['state'] ?? svc['State'],
-            'favorite': svc['favorite'] ?? svc['Favorite'],
-            'path': svc['path'] ?? svc['Path'],
-            'type': svc['type'] ?? svc['Type'],
-            'security': svc['security'] ?? svc['Security'],
-            'strength': svc['strength'] ?? svc['Strength'],
-            ...svc,
-          };
-        }).toList();
-
-        // Filter out hidden or unknown networks where the name is empty or missing
-        _wifiServices = mapped.where((svc) {
-          final name = svc['name'] as String?;
-          return name != null && name.trim().isNotEmpty;
-        }).toList();
+        _wifiServices = await _processWifiServices(results);
       } else {
         _wifiServices = [];
       }
     } finally {
-      if (mounted) setState(() {
-        _isRefreshing = false;
-        _isBusy = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isRefreshing = false;
+          _isBusy = false;
+        });
+      }
     }
   }
 
