@@ -249,7 +249,6 @@ class _SavedNetworkCardState extends State<_SavedNetworkCard> {
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.red),
                   ),
-                  onAction: () => widget.onForget(),
                   onPressed: widget.onForget,
                 ),
               ],
@@ -873,71 +872,3 @@ class _WifiPageState extends State<WifiPage> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Saved Networks Page
-// ---------------------------------------------------------------------------
-
-class SavedNetworksPage extends StatelessWidget {
-  final List<Map<String, dynamic>> services;
-  final Function(String) onRemove;
-  final Function(String) onConnect;
-  final Function(String) onDisconnect;
-
-  const SavedNetworksPage({
-    super.key,
-    required this.services,
-    required this.onRemove,
-    required this.onConnect,
-    required this.onDisconnect,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final savedServices = services.where((s) => s['favorite'] == true).toList();
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Saved Networks'),
-      ),
-      body: savedServices.isEmpty
-          ? const Center(child: Text('No saved networks'))
-          : ListView.builder(
-              itemCount: savedServices.length,
-              itemBuilder: (context, index) {
-                final svc = savedServices[index];
-                final name = svc['name'] as String? ?? 'Unknown';
-                final state = svc['state'] as String? ?? 'idle';
-                final path = svc['path'] as String? ?? '';
-                final isConn = state == 'ready' || state == 'online';
-
-                return ListTile(
-                  leading: const Icon(Icons.wifi_protected_setup),
-                  title: Text(name),
-                  subtitle: Text('State: $state'),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (isConn) const Icon(Icons.check, color: Colors.green),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () {
-                          onRemove(path);
-                          Navigator.pop(context);
-                        },
-                      ),
-                    ],
-                  ),
-                  onTap: () {
-                    if (isConn) {
-                      onDisconnect(path);
-                    } else {
-                      onConnect(path);
-                    }
-                    Navigator.pop(context);
-                  },
-                );
-              },
-            ),
-    );
-  }
-}
