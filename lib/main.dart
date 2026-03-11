@@ -36,6 +36,231 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Saved Networks Page
+// ---------------------------------------------------------------------------
+
+class SavedNetworksPage extends StatefulWidget {
+  const SavedNetworksPage({super.key});
+
+  @override
+  State<SavedNetworksPage> createState() => _SavedNetworksPageState();
+}
+
+class _SavedNetworksPageState extends State<SavedNetworksPage> {
+  List<Map<String, String>> _savedNetworks = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedNetworks();
+  }
+
+  Future<void> _loadSavedNetworks() async {
+    setState(() => _isLoading = true);
+    final networks = <Map<String, String>>[];
+
+    try {
+      final dir = Directory('/var/lib/connman');
+      if (await dir.exists()) {
+        final entries = dir.listSync();
+        for (final entry in entries) {
+          if (entry is Directory) {
+            final folderName = entry.path.split('/').last;
+            if (folderName.startsWith('wifi_')) {
+              final settingsFile = File('${entry.path}/settings');
+              if (await settingsFile.exists()) {
+                final content = await settingsFile.readAsLines();
+
+                String? name;
+                String? passphrase;
+                String? autoconnect;
+                String? modified;
+
+                for (final line in content) {
+                  if (line.startsWith('Name=')) name = line.substring(5);
+                  else if (line.startsWith('Passphrase=')) passphrase = line.substring(11);
+                  else if (line.startsWith('AutoConnect=')) autoconnect = line.substring(12);
+                  else if (line.startsWith('Modified=')) modified = line.substring(9);
+                }
+
+                if (name != null) {
+                  networks.add({
+                    'id': folderName,
+                    'path': '/net/connman/service/$folderName',
+                    'name': name,
+                    'passphrase': passphrase ?? '',
+                    'autoconnect': autoconnect ?? 'false',
+                    'modified': modified ?? '',
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error reading saved networks: $e');
+    }
+
+    if (mounted) {
+      setState(() {
+        _savedNetworks = networks;
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _forgetNetwork(String path, String name) async {
+    try {
+      final success = await ConnmanService.removeService(path);
+      if (success) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Forgot network: $name')),
+          );
+          _loadSavedNetworks(); // refresh
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to forget network: $name'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error forgetting network $path: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Saved Networks'),
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _savedNetworks.isEmpty
+              ? const Center(child: Text('No saved networks found', style: TextStyle(fontSize: 16)))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(16.0),
+                  itemCount: _savedNetworks.length,
+                  itemBuilder: (context, index) {
+                    final net = _savedNetworks[index];
+                    return _SavedNetworkCard(
+                      network: net,
+                      onForget: () => _forgetNetwork(net['path']!, net['name']!),
+                    );
+                  },
+                ),
+    );
+  }
+}
+
+class _SavedNetworkCard extends StatefulWidget {
+  final Map<String, String> network;
+  final VoidCallback onForget;
+
+  const _SavedNetworkCard({
+    required this.network,
+    required this.onForget,
+  });
+
+  @override
+  State<_SavedNetworkCard> createState() => _SavedNetworkCardState();
+}
+
+class _SavedNetworkCardState extends State<_SavedNetworkCard> {
+  bool _showPassword = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = widget.network['name']!;
+    final passphrase = widget.network['passphrase']!;
+    final autoconnect = widget.network['autoconnect'] == 'true';
+    final hasPassword = passphrase.isNotEmpty;
+
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.only(bottom: 16.0),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header: Name and AutoConnect icon
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    name,
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (autoconnect)
+                  const Tooltip(
+                    message: 'Auto-connects',
+                    child: Icon(Icons.autorenew, color: Colors.blue),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // Password Section
+            Row(
+              children: [
+                const Icon(Icons.lock_outline, size: 20, color: Colors.grey),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    hasPassword
+                        ? (_showPassword ? passphrase : '•' * passphrase.length)
+                        : 'No password',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 14,
+                      color: hasPassword ? Colors.black87 : Colors.grey,
+                    ),
+                  ),
+                ),
+                if (hasPassword)
+                  IconButton(
+                    icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () => setState(() => _showPassword = !_showPassword),
+                    tooltip: _showPassword ? 'Hide password' : 'Show password',
+                  ),
+              ],
+            ),
+
+            const Divider(height: 24),
+
+            // Actions
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  label: const Text('Forget', style: TextStyle(color: Colors.red)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.red),
+                  ),
+                  onAction: () => widget.onForget(),
+                  onPressed: widget.onForget,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Global navigator key so that `ConnmanService.onRequestInput` can push a
 /// dialog even though it is called outside of any widget context.
 final _navigatorKey = GlobalKey<NavigatorState>();
@@ -51,38 +276,62 @@ Future<Map<String, String>?> _showPasswordDialog(
 
   final ssidHint = service.split('/').last;
   final controllers = {for (final f in fields) f: TextEditingController()};
+  bool _obscureText = true;
 
   final result = await showDialog<Map<String, String>>(
     context: context,
     builder: (ctx) {
-      return AlertDialog(
-        title: const Text('Wi-Fi Password'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Network: $ssidHint'),
-            ...fields.map(
-              (field) => TextField(
-                controller: controllers[field],
-                decoration: InputDecoration(labelText: field),
-                obscureText: field.toLowerCase().contains('passphrase') ||
-                    field.toLowerCase().contains('password'),
+      return StatefulBuilder(
+        builder: (context, setState) {
+          return AlertDialog(
+            title: const Text('Wi-Fi Password'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Network: $ssidHint', style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 16),
+                ...fields.map((field) {
+                  final isPassword = field.toLowerCase().contains('passphrase') ||
+                      field.toLowerCase().contains('password');
+                  return TextField(
+                    controller: controllers[field],
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      labelText: field,
+                      border: const OutlineInputBorder(),
+                      suffixIcon: isPassword
+                          ? IconButton(
+                              icon: Icon(
+                                _obscureText ? Icons.visibility : Icons.visibility_off,
+                              ),
+                              onPressed: () {
+                                setState(() {
+                                  _obscureText = !_obscureText;
+                                });
+                              },
+                            )
+                          : null,
+                    ),
+                    obscureText: isPassword && _obscureText,
+                  );
+                }),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('Cancel'),
               ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(null),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(
-              {for (final f in fields) f: controllers[f]!.text},
-            ),
-            child: const Text('Connect'),
-          ),
-        ],
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(
+                  {for (final f in fields) f: controllers[f]!.text},
+                ),
+                child: const Text('Connect'),
+              ),
+            ],
+          );
+        }
       );
     },
   );
@@ -205,34 +454,42 @@ class _WifiPageState extends State<WifiPage> {
     if (_isRefreshing) return;
     if (mounted) setState(() => _isRefreshing = true);
 
-    final techInfo = await ConnmanService.getWifiTechnology();
-    if (techInfo != null) {
-      _isWifiPowered = (techInfo['powered'] ?? techInfo['Powered']) == true;
-    }
+    try {
+      final techInfo = await ConnmanService.getWifiTechnology();
+      if (techInfo != null) {
+        _isWifiPowered = (techInfo['powered'] ?? techInfo['Powered']) == true;
+      }
 
-    if (_isWifiPowered) {
-      final results = await ConnmanService.getWifiServices();
-      // ... (normalization logic)
-      _wifiServices = results.map((svc) {
-        return {
-          'name': svc['name'] ?? svc['Name'],
-          'state': svc['state'] ?? svc['State'],
-          'favorite': svc['favorite'] ?? svc['Favorite'],
-          'path': svc['path'] ?? svc['Path'],
-          'type': svc['type'] ?? svc['Type'],
-          'security': svc['security'] ?? svc['Security'],
-          'strength': svc['strength'] ?? svc['Strength'],
-          ...svc,
-        };
-      }).toList();
-    } else {
-      _wifiServices = [];
-    }
+      if (_isWifiPowered) {
+        final results = await ConnmanService.getWifiServices();
+        // ... (normalization logic)
+        final mapped = results.map((svc) {
+          return {
+            'name': svc['name'] ?? svc['Name'],
+            'state': svc['state'] ?? svc['State'],
+            'favorite': svc['favorite'] ?? svc['Favorite'],
+            'path': svc['path'] ?? svc['Path'],
+            'type': svc['type'] ?? svc['Type'],
+            'security': svc['security'] ?? svc['Security'],
+            'strength': svc['strength'] ?? svc['Strength'],
+            ...svc,
+          };
+        }).toList();
 
-    if (mounted) setState(() {
-      _isRefreshing = false;
-      _isBusy = false;
-    });
+        // Filter out hidden or unknown networks where the name is empty or missing
+        _wifiServices = mapped.where((svc) {
+          final name = svc['name'] as String?;
+          return name != null && name.trim().isNotEmpty;
+        }).toList();
+      } else {
+        _wifiServices = [];
+      }
+    } finally {
+      if (mounted) setState(() {
+        _isRefreshing = false;
+        _isBusy = false;
+      });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -255,8 +512,14 @@ class _WifiPageState extends State<WifiPage> {
 
     try {
       // Call ConnMan to set power state
-      await ConnmanService.setWifiPowered(value);
+      final success = await ConnmanService.setWifiPowered(value);
       
+      if (!success) {
+        debugPrint('Failed to set Wi-Fi powered state to $value');
+        await _refreshWifiStatus();
+        return;
+      }
+
       if (value) {
         await _startMonitoring();
         // Wait a bit and refresh status
@@ -271,6 +534,9 @@ class _WifiPageState extends State<WifiPage> {
           });
         }
       }
+    } catch (e) {
+      debugPrint('Error toggling Wi-Fi: $e');
+      await _refreshWifiStatus();
     } finally {
       if (mounted) setState(() => _isToggling = false);
     }
@@ -307,17 +573,45 @@ class _WifiPageState extends State<WifiPage> {
 
   Future<void> _connectService(String path) async {
     if (mounted) setState(() => _isBusy = true);
-    await ConnmanService.connectService(path);
+    try {
+      final success = await ConnmanService.connectService(path);
+      if (!success && mounted) {
+        debugPrint('Failed to connect to service');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to connect to network. Check password or try again.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    } finally {
+      // It is important to wait a short moment or check state from DBus.
+      // We rely on servicesChanged event to clear `_isBusy` on success,
+      // but we should clear it here if it fails, or after a timeout
+      // to avoid getting stuck. The underlying method has a timeout,
+      // so if it completes without the event clearing `_isBusy`, we
+      // should clear it.
+      if (mounted) setState(() => _isBusy = false);
+    }
   }
 
   Future<void> _disconnectService(String path) async {
     if (mounted) setState(() => _isBusy = true);
-    await ConnmanService.disconnectService(path);
+    try {
+      await ConnmanService.disconnectService(path);
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
   }
 
   Future<void> _removeService(String path) async {
     if (mounted) setState(() => _isBusy = true);
-    await ConnmanService.removeService(path);
+    try {
+      await ConnmanService.removeService(path);
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -329,37 +623,56 @@ class _WifiPageState extends State<WifiPage> {
     final state = service['state'] as String? ?? 'idle';
     final path = service['path'] as String?;
     final isConnectedSvc = state == 'ready' || state == 'online';
+    final isFavorite = service['favorite'] == true;
+    final strength = (service['strength'] as num?)?.toInt() ?? 0;
+    final security = (service['security'] as List?)?.join(', ') ?? 'none';
 
     showModalBottomSheet(
       context: ctx,
-      builder: (_) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(title: Text(name), subtitle: Text('State: $state')),
-          if (isConnectedSvc)
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
             ListTile(
-              title: const Text('Disconnect'),
-              onTap: () {
-                Navigator.pop(ctx);
-                if (path != null) _disconnectService(path);
-              },
-            )
-          else
-            ListTile(
-              title: const Text('Connect'),
-              onTap: () {
-                Navigator.pop(ctx);
-                if (path != null) _connectService(path);
-              },
+              leading: _getWifiIcon(strength, security, connected: isConnectedSvc),
+              title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              subtitle: Text('Status: ${_formatState(state)}\nSignal: $strength%\nSecurity: $security'),
+              isThreeLine: true,
             ),
-          ListTile(
-            title: const Text('Forget'),
-            onTap: () {
-              Navigator.pop(ctx);
-              if (path != null) _removeService(path);
-            },
-          ),
-        ],
+            const Divider(),
+            if (isConnectedSvc)
+              ListTile(
+                leading: const Icon(Icons.link_off),
+                title: const Text('Disconnect'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  if (path != null) _disconnectService(path);
+                },
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.link),
+                title: const Text('Connect'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  if (path != null) _connectService(path);
+                },
+              ),
+            if (isFavorite) // Only show 'Forget' if it's a saved network
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text('Forget Network', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  if (path != null) _removeService(path);
+                },
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -378,7 +691,7 @@ class _WifiPageState extends State<WifiPage> {
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
               child: SizedBox(
-                  width: 20, height: 20, child: CircularProgressIndicator()),
+                  width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
             ),
           Switch(
             value: _isWifiPowered,
@@ -386,6 +699,7 @@ class _WifiPageState extends State<WifiPage> {
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
+            tooltip: 'Scan for networks',
             onPressed: (_isWifiPowered && !_isBusy) ? _scanWifi : null,
           ),
           IconButton(
@@ -396,17 +710,13 @@ class _WifiPageState extends State<WifiPage> {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => SavedNetworksPage(
-                          services: _wifiServices,
-                          onRemove: (path) => _removeService(path),
-                          onConnect: (path) => _connectService(path),
-                          onDisconnect: (path) => _disconnectService(path),
-                        ),
+                        builder: (context) => const SavedNetworksPage(),
                       ),
-                    );
+                    ).then((_) => _refreshWifiStatus());
                   }
                 : null,
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: _isWifiPowered
@@ -418,49 +728,146 @@ class _WifiPageState extends State<WifiPage> {
   }
 
   Widget _buildGroupedList() {
-    final saved = _wifiServices.where((s) => s['favorite'] == true).toList();
-    final available = _wifiServices.where((s) => s['favorite'] != true).toList();
+    // Separate into Connected, Saved, and Available networks.
+    final connected = _wifiServices.where((s) => s['state'] == 'ready' || s['state'] == 'online').toList();
+    // Exclude connected from saved to avoid duplication.
+    final saved = _wifiServices.where((s) => s['favorite'] == true && s['state'] != 'ready' && s['state'] != 'online').toList();
+    // Available: neither connected nor saved.
+    final available = _wifiServices.where((s) => s['favorite'] != true && s['state'] != 'ready' && s['state'] != 'online').toList();
 
     return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
       children: [
+        if (connected.isNotEmpty) ...[
+          _buildSectionHeader('CONNECTED'),
+          ...connected.map((svc) => _buildConnectedCard(svc)),
+          const SizedBox(height: 16),
+        ],
         if (saved.isNotEmpty) ...[
-          const ListTile(
-            title: Text('SAVED NETWORKS',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+          _buildSectionHeader('SAVED NETWORKS'),
           ...saved.map((svc) => _buildServiceTile(svc)),
-          const Divider(),
+          const Divider(height: 32),
         ],
         if (available.isNotEmpty) ...[
-          const ListTile(
-            title: Text('AVAILABLE NETWORKS',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
+          _buildSectionHeader('AVAILABLE NETWORKS'),
           ...available.map((svc) => _buildServiceTile(svc)),
         ],
       ],
     );
   }
 
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+          letterSpacing: 1.2,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+      ),
+    );
+  }
+
+  Widget _getWifiIcon(int strength, String security, {bool connected = false}) {
+    final isSecure = security != 'none' && security != '';
+    IconData iconData;
+
+    if (strength > 75) {
+      iconData = isSecure ? Icons.signal_wifi_4_bar_lock : Icons.signal_wifi_4_bar;
+    } else if (strength > 50) {
+      iconData = isSecure ? Icons.network_wifi_3_bar : Icons.network_wifi_3_bar; // fallback lock handling
+    } else if (strength > 25) {
+      iconData = isSecure ? Icons.network_wifi_2_bar : Icons.network_wifi_2_bar;
+    } else {
+      iconData = isSecure ? Icons.network_wifi_1_bar : Icons.network_wifi_1_bar;
+    }
+
+    // For Material Icons, standard "signal_wifi_X_bar" icons look best.
+    // We can simulate the lock with a badge if preferred, or just rely on standard icons.
+    if (isSecure && strength <= 75) {
+       iconData = Icons.wifi_lock; // Generic fallback if precise bar+lock isn't available
+    }
+
+    return Icon(
+      iconData,
+      color: connected ? Theme.of(context).colorScheme.primary : Colors.grey[700],
+      size: 28,
+    );
+  }
+
+  String _formatState(String state) {
+    switch (state) {
+      case 'idle':
+        return 'Not connected';
+      case 'association':
+      case 'configuration':
+        return 'Connecting...';
+      case 'ready':
+      case 'online':
+        return 'Connected';
+      case 'failure':
+        return 'Failed to connect';
+      case 'disconnect':
+        return 'Disconnecting...';
+      default:
+        return state[0].toUpperCase() + state.substring(1);
+    }
+  }
+
+  Widget _buildConnectedCard(Map<String, dynamic> svc) {
+    final name = svc['name'] as String? ?? 'Unknown';
+    final state = svc['state'] as String? ?? 'idle';
+    final strength = (svc['strength'] as num?)?.toInt() ?? 100;
+    final security = (svc['security'] as List?)?.join(', ') ?? 'none';
+
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(vertical: 4.0),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+        leading: _getWifiIcon(strength, security, connected: true),
+        title: Text(
+          name,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        subtitle: Text(
+          _formatState(state),
+          style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer),
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.info_outline),
+          onPressed: () => _showServiceOptions(context, svc),
+        ),
+        onTap: () => _showServiceOptions(context, svc),
+      ),
+    );
+  }
+
   Widget _buildServiceTile(Map<String, dynamic> svc) {
     final name = svc['name'] as String? ?? 'Unknown';
     final state = svc['state'] as String? ?? 'idle';
-    final isConn = state == 'ready' || state == 'online';
     final isFavorite = svc['favorite'] == true;
+    final strength = (svc['strength'] as num?)?.toInt() ?? 100;
+    final security = (svc['security'] as List?)?.join(', ') ?? 'none';
+
+    String subtitleText = isFavorite && state == 'idle' ? 'Saved' : _formatState(state);
+    if (state == 'idle' && !isFavorite) {
+       subtitleText = security != 'none' ? 'Secured' : 'Open';
+    }
 
     return ListTile(
-      leading: Icon(isConn
-          ? Icons.wifi
-          : (isFavorite ? Icons.wifi_protected_setup : Icons.wifi_lock)),
-      title: Text(name),
-      subtitle: Text(state),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (isFavorite) const Icon(Icons.star, color: Colors.amber, size: 16),
-          if (isConn) const Icon(Icons.check, color: Colors.green),
-        ],
-      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
+      leading: _getWifiIcon(strength, security),
+      title: Text(name, style: const TextStyle(fontSize: 16)),
+      subtitle: Text(subtitleText),
+      trailing: isFavorite
+          ? const Icon(Icons.bookmark, color: Colors.grey, size: 20)
+          : null,
       onTap: () => _showServiceOptions(context, svc),
     );
   }
